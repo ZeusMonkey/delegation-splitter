@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.19;
 
+import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -18,8 +19,8 @@ contract DelegationSplitter is Ownable {
     // inst token address
     IERC20 public immutable instToken;
 
-    // delegatee => delegation holder
-    mapping(address => IDelegationHolder) public delegationHolders;
+    bytes32 public constant INIT_CODE_HASH =
+        keccak256(abi.encodePacked(type(DelegationHolder).creationCode));
 
     /**
      * initialize DelegationSplitter contract
@@ -122,19 +123,34 @@ contract DelegationSplitter is Ownable {
         internal
         returns (IDelegationHolder holder)
     {
-        if (address(delegationHolders[delegatee]) == address(0)) {
-            bytes32 salt = keccak256(abi.encodePacked(delegatee));
+        bytes32 salt = keccak256(abi.encodePacked(delegatee));
 
-            delegationHolders[delegatee] = new DelegationHolder{salt: salt}(
-                address(instToken),
-                delegatee
-            );
+        address holderAddr = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            hex"ff",
+                            address(this),
+                            salt,
+                            INIT_CODE_HASH
+                        )
+                    )
+                )
+            )
+        );
+
+        if (!Address.isContract(holderAddr)) {
+            new DelegationHolder{salt: salt}(address(instToken), delegatee);
         }
 
-        holder = delegationHolders[delegatee];
+        holder = IDelegationHolder(holderAddr);
     }
 
-    function _validateZero(address nonZeroAddr, uint256 nonZeroUint) internal {
+    function _validateZero(address nonZeroAddr, uint256 nonZeroUint)
+        internal
+        pure
+    {
         if (nonZeroAddr == address(0)) revert Errors.ZeroAddress();
         if (nonZeroUint == 0) revert Errors.ZeroAmount();
     }
