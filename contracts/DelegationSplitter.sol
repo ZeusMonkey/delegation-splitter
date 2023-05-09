@@ -40,13 +40,10 @@ contract DelegationSplitter is Ownable {
     function delegate(address delegatee, uint256 amount) external onlyOwner {
         _validateZero(delegatee, amount);
 
-        if (delegatee == address(0)) revert Errors.ZeroAddress();
-        if (amount == 0) revert Errors.ZeroAmount();
-
         address _delegatee = delegatee;
         uint256 _amount = amount;
 
-        IDelegationHolder holder = _getHolder(_delegatee);
+        IDelegationHolder holder = _getOrCreateHolder(_delegatee);
 
         instToken.safeTransfer(address(holder), _amount);
 
@@ -69,7 +66,7 @@ contract DelegationSplitter is Ownable {
         address _delegatee = delegatee;
         uint256 _amount = amount;
 
-        IDelegationHolder holder = _getHolder(_delegatee);
+        IDelegationHolder holder = _getOrCreateHolder(_delegatee);
 
         holder.withdraw(to == address(0) ? address(this) : to, _amount);
 
@@ -88,13 +85,16 @@ contract DelegationSplitter is Ownable {
         uint256 amount
     ) external onlyOwner {
         _validateZero(newDelegatee, amount);
+        if (oldDelegatee == newDelegatee) {
+            revert Errors.SameAddress();
+        }
 
         address _oldDelegatee = oldDelegatee;
         address _newDelegatee = newDelegatee;
         uint256 _amount = amount;
 
-        IDelegationHolder oldHolder = _getHolder(_oldDelegatee);
-        IDelegationHolder newHolder = _getHolder(_newDelegatee);
+        IDelegationHolder oldHolder = _getOrCreateHolder(_oldDelegatee);
+        IDelegationHolder newHolder = _getOrCreateHolder(_newDelegatee);
         oldHolder.withdraw(address(newHolder), _amount);
 
         emit UnDelegated(oldDelegatee, _amount);
@@ -115,17 +115,25 @@ contract DelegationSplitter is Ownable {
     }
 
     /**
-     * Get DelegationHolder contract associated to `delegatee`.
-     * @dev if DelegationHolder contract does not exist, create new one using CREATE2.
+     * Disable renounce ownership
+     */
+    function renounceOwnership() public override onlyOwner {
+        revert Errors.ZeroAddress();
+    }
+
+    /**
+     * Get DelegationHolder address.
+     * @dev Even holder contract was not created, it returns expected Create2 address.
      * @param delegatee delegatee address
      */
-    function _getHolder(address delegatee)
-        internal
-        returns (IDelegationHolder holder)
+    function getHolder(address delegatee)
+        public
+        view
+        returns (address holderAddr)
     {
         bytes32 salt = keccak256(abi.encodePacked(delegatee));
 
-        address holderAddr = address(
+        holderAddr = address(
             uint160(
                 uint256(
                     keccak256(
@@ -139,9 +147,23 @@ contract DelegationSplitter is Ownable {
                 )
             )
         );
+    }
+
+    /**
+     * Get DelegationHolder contract associated to `delegatee`.
+     * @dev if DelegationHolder contract does not exist, create new one using CREATE2.
+     * @param delegatee delegatee address
+     */
+    function _getOrCreateHolder(address delegatee)
+        internal
+        returns (IDelegationHolder holder)
+    {
+        address holderAddr = getHolder(delegatee);
 
         if (!Address.isContract(holderAddr)) {
-            new DelegationHolder{salt: salt}(address(instToken), delegatee);
+            bytes32 salt = keccak256(abi.encodePacked(delegatee));
+            IDelegationHolder _holder = new DelegationHolder{salt: salt}();
+            _holder.initialize(address(instToken), delegatee);
         }
 
         holder = IDelegationHolder(holderAddr);
